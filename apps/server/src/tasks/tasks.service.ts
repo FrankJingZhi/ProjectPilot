@@ -43,7 +43,12 @@ export class TasksService {
     return this.prisma.task.findMany({
       where: { projectId, status: query.status, type: query.type },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
-      include: { _count: { select: { children: true } } },
+      include: {
+        _count: { select: { children: true } },
+        dependencies: {
+          include: { dependsOnTask: { select: { id: true, title: true, status: true } } },
+        },
+      },
     });
   }
 
@@ -136,6 +141,74 @@ export class TasksService {
         select: { parentId: true },
       });
       cursor = row?.parentId ?? null;
+    }
+  }
+
+  // ==================== 任务依赖 ====================
+
+  // 查询任务的依赖列表
+  async listDependencies(projectId: string, taskId: string) {
+    const task = await this.findOne(projectId, taskId);
+    return task.dependencies;
+  }
+
+  // 新增依赖：校验同项目、非自依赖、不重复、不成环
+  async addDependency(projectId: string, taskId: string, dependsOnTaskId: string, type?: string) {
+    await this.findOne(projectId, taskId);
+    if (taskId === dependsOnTaskId) {
+      throw new BadRequestException('任务不能依赖自己');
+    }
+    const predecessor = await this.prisma.task.findFirst({
+      where: { id: dependsOnTaskId, projectId },
+    });
+    if (!predecessor) {
+      throw new BadRequestException('前置任务不存在或不属于该项目');
+    }
+    const existing = await this.prisma.taskDependency.findUnique({
+      where: { taskId_dependsOnTaskId: { taskId, dependsOnTaskId } },
+    });
+    if (existing) {
+      throw new BadRequestException('该依赖关系已存在');
+    }
+    await this.assertNoDependencyCycle(taskId, dependsOnTaskId);
+    return this.prisma.taskDependency.create({
+      data: {
+        taskId,
+        dependsOnTaskId,
+        type: (type as never) ?? 'FINISH_TO_START',
+      },
+      include: { dependsOnTask: true },
+    });
+  }
+
+  // 删除依赖
+  async removeDependency(projectId: string, taskId: string, dependencyId: string) {
+    const dependency = await this.prisma.taskDependency.findFirst({
+      where: { id: dependencyId, taskId, task: { projectId } },
+    });
+    if (!dependency) {
+      throw new NotFoundException(`依赖关系不存在：${dependencyId}`);
+    }
+    await this.prisma.taskDependency.delete({ where: { id: dependencyId } });
+    return { deleted: true };
+  }
+
+  // 防环：从前置任务出发沿依赖链遍历，若能回到当前任务则会成环
+  private async assertNoDependencyCycle(taskId: string, dependsOnTaskId: string) {
+    const stack = [dependsOnTaskId];
+    const seen = new Set<string>();
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      if (current === taskId) {
+        throw new BadRequestException('该依赖会形成循环（A 依赖 B，B 又依赖 A）');
+      }
+      if (seen.has(current)) continue;
+      seen.add(current);
+      const deps = await this.prisma.taskDependency.findMany({
+        where: { taskId: current },
+        select: { dependsOnTaskId: true },
+      });
+      stack.push(...deps.map((d) => d.dependsOnTaskId));
     }
   }
 }

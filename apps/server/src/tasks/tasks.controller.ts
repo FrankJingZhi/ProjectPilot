@@ -9,6 +9,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { CreateDependencyDto } from './dto/create-dependency.dto';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTaskDto } from './dto/query-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
@@ -51,5 +52,33 @@ export class TasksController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.tasks.remove(projectId, id);
+  }
+
+  // ==================== 任务依赖 ====================
+
+  @Get(':id/dependencies')
+  listDependencies(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.tasks.listDependencies(projectId, id);
+  }
+
+  @Post(':id/dependencies')
+  addDependency(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateDependencyDto,
+  ) {
+    return this.tasks.addDependency(projectId, id, dto.dependsOnTaskId, dto.type);
+  }
+
+  @Delete(':id/dependencies/:dependencyId')
+  removeDependency(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('dependencyId', ParseUUIDPipe) dependencyId: string,
+  ) {
+    return this.tasks.removeDependency(projectId, id, dependencyId);
   }
 }

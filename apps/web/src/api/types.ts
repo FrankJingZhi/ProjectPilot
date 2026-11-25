@@ -17,6 +17,16 @@ export interface Project {
   _count?: { tasks: number };
 }
 
+export type DependencyType = 'FINISH_TO_START' | 'START_TO_START' | 'FINISH_TO_FINISH';
+
+export interface TaskDependency {
+  id: string;
+  taskId: string;
+  dependsOnTaskId: string;
+  type: DependencyType;
+  dependsOnTask?: Pick<Task, 'id' | 'title' | 'status'>;
+}
+
 export interface Task {
   id: string;
   projectId: string;
@@ -34,6 +44,7 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
   _count?: { children: number };
+  dependencies?: TaskDependency[];
 }
 
 // 展示用字典

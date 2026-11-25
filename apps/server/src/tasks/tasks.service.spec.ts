@@ -5,6 +5,13 @@ import { TasksService } from './tasks.service';
 describe('TasksService', () => {
   const prisma = {
     project: { findUnique: vi.fn() },
+    taskDependency: {
+      findUnique: vi.fn(),
+      findFirst: vi.fn(),
+      findMany: vi.fn(),
+      create: vi.fn(),
+      delete: vi.fn(),
+    },
     task: {
       create: vi.fn(),
       findMany: vi.fn(),
@@ -77,5 +84,54 @@ describe('TasksService', () => {
   it('删除不存在的任务抛 NotFoundException', async () => {
     prisma.task.findFirst.mockResolvedValue(null);
     await expect(service.remove('p1', 'missing')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('任务不能依赖自己', async () => {
+    prisma.task.findFirst.mockResolvedValue({
+      id: 't1',
+      projectId: 'p1',
+      type: 'TASK',
+      parentId: null,
+    });
+    await expect(service.addDependency('p1', 't1', 't1')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it('重复依赖应被拒绝', async () => {
+    prisma.task.findFirst.mockImplementation(({ where }) =>
+      Promise.resolve({ id: where.id, projectId: 'p1', type: 'TASK', parentId: null }),
+    );
+    prisma.taskDependency.findUnique.mockResolvedValue({ id: 'dep-1' });
+    await expect(service.addDependency('p1', 't1', 't2')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it('循环依赖应被拒绝（t2 已依赖 t1，再让 t1 依赖 t2）', async () => {
+    prisma.task.findFirst.mockImplementation(({ where }) =>
+      Promise.resolve({ id: where.id, projectId: 'p1', type: 'TASK', parentId: null }),
+    );
+    prisma.taskDependency.findUnique.mockResolvedValue(null);
+    // t2 的依赖链指向 t1
+    prisma.taskDependency.findMany.mockImplementation(({ where }) =>
+      Promise.resolve(where.taskId === 't2' ? [{ dependsOnTaskId: 't1' }] : []),
+    );
+    await expect(service.addDependency('p1', 't1', 't2')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+  });
+
+  it('合法依赖创建成功', async () => {
+    prisma.task.findFirst.mockImplementation(({ where }) =>
+      Promise.resolve({ id: where.id, projectId: 'p1', type: 'TASK', parentId: null }),
+    );
+    prisma.taskDependency.findUnique.mockResolvedValue(null);
+    prisma.taskDependency.findMany.mockResolvedValue([]);
+    prisma.taskDependency.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 'dep-new', ...data }),
+    );
+    const dep = await service.addDependency('p1', 't1', 't2');
+    expect(dep.dependsOnTaskId).toBe('t2');
   });
 });

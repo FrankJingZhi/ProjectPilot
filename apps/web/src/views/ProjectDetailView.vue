@@ -11,6 +11,7 @@ import {
 } from '@/api/types';
 import AppModal from '@/components/AppModal.vue';
 import ConfirmDialog from '@/components/ConfirmDialog.vue';
+import TaskKanban from '@/components/TaskKanban.vue';
 
 const route = useRoute();
 const projectId = route.params.id as string;
@@ -20,6 +21,8 @@ const tasks = ref<Task[]>([]);
 const loading = ref(true);
 const loadError = ref<string | null>(null);
 const statusFilter = ref<TaskStatus | ''>('');
+// 视图模式：列表 / 看板（支持 ?view=kanban 直达）
+const viewMode = ref<'list' | 'kanban'>(route.query.view === 'kanban' ? 'kanban' : 'list');
 
 // 任务表单（新建/编辑共用）
 const taskModalOpen = ref(false);
@@ -39,6 +42,16 @@ const emptyForm = {
 };
 const form = ref({ ...emptyForm });
 
+// 依赖编辑：id 为 null 表示本次新增；removedDeps 记录本次删除
+interface DepItem {
+  id: string | null;
+  dependsOnTaskId: string;
+  title: string;
+}
+const formDeps = ref<DepItem[]>([]);
+const removedDeps = ref<string[]>([]);
+const depToAdd = ref('');
+
 // 删除确认
 const deleteTarget = ref<Task | null>(null);
 const deleting = ref(false);
@@ -50,6 +63,14 @@ const PRIORITY_OPTIONS = Object.keys(TASK_PRIORITY_LABELS) as TaskPriority[];
 // 可作为父任务的候选（Epic/Story，编辑时排除自身）
 const parentOptions = computed(() =>
   tasks.value.filter((t) => t.type !== 'TASK' && t.id !== editingTask.value?.id),
+);
+
+// 可作为前置任务的候选（排除自身与已选）
+const depCandidates = computed(() =>
+  tasks.value.filter(
+    (t) =>
+      t.id !== editingTask.value?.id && !formDeps.value.some((d) => d.dependsOnTaskId === t.id),
+  ),
 );
 
 // 表格行：无过滤时按层级 DFS 排序并计算缩进深度
@@ -77,7 +98,6 @@ const rows = computed<Row[]>(() => {
     }
   };
   walk(null, 0);
-  // 孤儿任务（父任务被删后残留引用等兜底）
   for (const task of tasks.value) {
     if (!result.some((r) => r.task.id === task.id)) {
       result.push({ task, depth: 0 });
@@ -112,11 +132,14 @@ async function load(): Promise<void> {
 function openCreate(): void {
   editingTask.value = null;
   form.value = { ...emptyForm };
+  formDeps.value = [];
+  removedDeps.value = [];
+  depToAdd.value = '';
   formError.value = null;
   taskModalOpen.value = true;
 }
 
-function openEdit(task: Task): void {
+async function openEdit(task: Task): Promise<void> {
   editingTask.value = task;
   form.value = {
     title: task.title,
@@ -129,8 +152,43 @@ function openEdit(task: Task): void {
     plannedStart: task.plannedStart ? task.plannedStart.slice(0, 10) : '',
     plannedEnd: task.plannedEnd ? task.plannedEnd.slice(0, 10) : '',
   };
+  formDeps.value = [];
+  removedDeps.value = [];
+  depToAdd.value = '';
   formError.value = null;
   taskModalOpen.value = true;
+  // 拉取任务详情以获得完整依赖信息
+  try {
+    const detail = await apiGet<
+      Task & {
+        dependencies?: { id: string; dependsOnTaskId: string; dependsOnTask?: { title: string } }[];
+      }
+    >(`/projects/${projectId}/tasks/${task.id}`);
+    formDeps.value = (detail.dependencies ?? []).map((d) => ({
+      id: d.id,
+      dependsOnTaskId: d.dependsOnTaskId,
+      title: d.dependsOnTask?.title ?? d.dependsOnTaskId,
+    }));
+  } catch {
+    // 依赖加载失败不阻塞编辑表单
+  }
+}
+
+function addDep(): void {
+  if (!depToAdd.value) return;
+  const target = tasks.value.find((t) => t.id === depToAdd.value);
+  formDeps.value.push({
+    id: null,
+    dependsOnTaskId: depToAdd.value,
+    title: target?.title ?? depToAdd.value,
+  });
+  depToAdd.value = '';
+}
+
+function removeDep(index: number): void {
+  const item = formDeps.value[index];
+  if (item.id) removedDeps.value.push(item.id);
+  formDeps.value.splice(index, 1);
 }
 
 async function saveTask(): Promise<void> {
@@ -148,10 +206,22 @@ async function saveTask(): Promise<void> {
     plannedEnd: form.value.plannedEnd || undefined,
   };
   try {
+    let taskId: string;
     if (editingTask.value) {
-      await apiPatch(`/projects/${projectId}/tasks/${editingTask.value.id}`, payload);
+      taskId = editingTask.value.id;
+      await apiPatch(`/projects/${projectId}/tasks/${taskId}`, payload);
     } else {
-      await apiPost(`/projects/${projectId}/tasks`, payload);
+      const created = await apiPost<Task>(`/projects/${projectId}/tasks`, payload);
+      taskId = created.id;
+    }
+    // 同步依赖：先删后增
+    for (const depId of removedDeps.value) {
+      await apiDelete(`/projects/${projectId}/tasks/${taskId}/dependencies/${depId}`);
+    }
+    for (const dep of formDeps.value.filter((d) => d.id === null)) {
+      await apiPost(`/projects/${projectId}/tasks/${taskId}/dependencies`, {
+        dependsOnTaskId: dep.dependsOnTaskId,
+      });
     }
     taskModalOpen.value = false;
     await load();
@@ -162,7 +232,7 @@ async function saveTask(): Promise<void> {
   }
 }
 
-// 表格内快捷切换状态
+// 表格/看板内快捷切换状态
 async function changeStatus(task: Task, status: TaskStatus): Promise<void> {
   try {
     await apiPatch(`/projects/${projectId}/tasks/${task.id}`, { status });
@@ -239,17 +309,38 @@ onMounted(load);
         </div>
       </div>
 
-      <!-- 任务工具栏 -->
-      <div class="flex items-center justify-between">
-        <select
-          v-model="statusFilter"
-          class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-        >
-          <option value="">全部状态</option>
-          <option v-for="s in STATUS_OPTIONS" :key="s" :value="s">
-            {{ TASK_STATUS_LABELS[s] }}
-          </option>
-        </select>
+      <!-- 工具栏：视图切换 + 过滤 + 新建 -->
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <div class="flex overflow-hidden rounded-lg border border-slate-200 text-sm">
+            <button
+              class="px-3 py-2"
+              :class="viewMode === 'list' ? 'bg-blue-600 text-white' : 'bg-white hover:bg-slate-50'"
+              @click="viewMode = 'list'"
+            >
+              列表
+            </button>
+            <button
+              class="px-3 py-2"
+              :class="
+                viewMode === 'kanban' ? 'bg-blue-600 text-white' : 'bg-white hover:bg-slate-50'
+              "
+              @click="viewMode = 'kanban'"
+            >
+              看板
+            </button>
+          </div>
+          <select
+            v-if="viewMode === 'list'"
+            v-model="statusFilter"
+            class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          >
+            <option value="">全部状态</option>
+            <option v-for="s in STATUS_OPTIONS" :key="s" :value="s">
+              {{ TASK_STATUS_LABELS[s] }}
+            </option>
+          </select>
+        </div>
         <button
           class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
           @click="openCreate"
@@ -258,8 +349,16 @@ onMounted(load);
         </button>
       </div>
 
-      <!-- 任务表格 -->
-      <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      <!-- 看板视图 -->
+      <TaskKanban
+        v-if="viewMode === 'kanban'"
+        :tasks="tasks"
+        @status-change="changeStatus"
+        @edit="openEdit"
+      />
+
+      <!-- 列表视图 -->
+      <div v-else class="overflow-x-auto rounded-xl border border-slate-200 bg-white">
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-slate-100 text-left text-xs text-slate-400">
@@ -291,6 +390,13 @@ onMounted(load);
                   <span v-if="depth > 0" class="text-slate-300">└</span>
                   <span :class="{ 'text-slate-400 line-through': task.status === 'CANCELLED' }">
                     {{ task.title }}
+                  </span>
+                  <span
+                    v-if="(task.dependencies?.length ?? 0) > 0"
+                    class="rounded bg-slate-100 px-1.5 text-[10px] text-slate-500"
+                    title="前置任务数量"
+                  >
+                    依赖 {{ task.dependencies!.length }}
                   </span>
                 </span>
               </td>
@@ -433,6 +539,48 @@ onMounted(load);
             class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
           ></textarea>
         </div>
+
+        <!-- 前置任务（依赖）管理 -->
+        <div class="rounded-lg border border-slate-100 bg-slate-50/60 p-3">
+          <label class="mb-2 block text-sm font-medium">前置任务（本任务需等它们完成）</label>
+          <ul v-if="formDeps.length > 0" class="mb-2 space-y-1">
+            <li
+              v-for="(dep, index) in formDeps"
+              :key="dep.dependsOnTaskId"
+              class="flex items-center justify-between rounded bg-white px-3 py-1.5 text-sm"
+            >
+              <span>{{ dep.title }}</span>
+              <button
+                type="button"
+                class="text-xs text-rose-500 hover:underline"
+                @click="removeDep(index)"
+              >
+                移除
+              </button>
+            </li>
+          </ul>
+          <p v-else class="mb-2 text-xs text-slate-400">暂无前置任务</p>
+          <div class="flex gap-2">
+            <select
+              v-model="depToAdd"
+              class="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            >
+              <option value="">选择前置任务…</option>
+              <option v-for="t in depCandidates" :key="t.id" :value="t.id">
+                {{ TASK_TYPE_LABELS[t.type] }} · {{ t.title }}
+              </option>
+            </select>
+            <button
+              type="button"
+              class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+              :disabled="!depToAdd"
+              @click="addDep"
+            >
+              添加
+            </button>
+          </div>
+        </div>
+
         <p v-if="formError" class="text-sm text-rose-600">{{ formError }}</p>
         <div class="flex justify-end gap-2">
           <button
