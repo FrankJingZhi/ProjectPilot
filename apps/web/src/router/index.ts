@@ -23,6 +23,12 @@ export const router = createRouter({
           meta: { title: '项目列表' },
         },
         {
+          path: 'projects/:id',
+          name: 'project-detail',
+          component: () => import('@/views/ProjectDetailView.vue'),
+          meta: { title: '项目详情' },
+        },
+        {
           path: 'tasks',
           name: 'tasks',
           component: () => import('@/views/TasksView.vue'),

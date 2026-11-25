@@ -1,0 +1,94 @@
+### ProjectPilot API 验证用例
+### 用法：VS Code 安装 REST Client 插件后，点击每个请求上方的 "Send Request"
+### 或 JetBrains 系 IDE 直接打开本文件运行
+
+@base = http://localhost:3000/api
+@projectId = 5160b90c-ef77-4cde-83c5-7510da61a3ed
+
+### 1. 健康检查（应返回 database=up）
+GET {{base}}/health
+
+### 2. 项目列表
+GET {{base}}/projects
+
+### 3. 创建项目（记下返回的 id）
+POST {{base}}/projects
+Content-Type: application/json
+
+{
+  "name": "API 验证项目",
+  "description": "用于手工验证 CRUD",
+  "targetEndDate": "2026-12-31"
+}
+
+### 4. 项目详情（含需求/里程碑/任务统计）
+GET {{base}}/projects/{{projectId}}
+
+### 5. 修改项目
+PATCH {{base}}/projects/{{projectId}}
+Content-Type: application/json
+
+{
+  "status": "ACTIVE"
+}
+
+### 6. 任务列表（演示项目）
+GET {{base}}/projects/{{projectId}}/tasks
+
+### 7. 按状态过滤任务
+GET {{base}}/projects/{{projectId}}/tasks?status=IN_PROGRESS
+
+### 8. 创建 Epic
+POST {{base}}/projects/{{projectId}}/tasks
+Content-Type: application/json
+
+{
+  "title": "文档分享模块",
+  "type": "EPIC",
+  "priority": "P1",
+  "assigneeRole": "前后端",
+  "estimatedDays": 1.5
+}
+
+### 9. 创建子 Story（parentId 换成上一步返回的 Epic id）
+POST {{base}}/projects/{{projectId}}/tasks
+Content-Type: application/json
+
+{
+  "title": "分享链接生成",
+  "type": "STORY",
+  "parentId": "换成Epic的ID",
+  "assigneeRole": "后端"
+}
+
+### 10. 非法层级验证：TASK 下挂子任务（应返回 400 中文错误）
+### 先把 parentId 换成任意 TASK 类型任务的 id
+POST {{base}}/projects/{{projectId}}/tasks
+Content-Type: application/json
+
+{
+  "title": "应当被拒绝的任务",
+  "parentId": "换成TASK的ID"
+}
+
+### 11. 参数校验验证：空项目名（应返回 400）
+POST {{base}}/projects
+Content-Type: application/json
+
+{
+  "name": ""
+}
+
+### 12. 修改任务状态（任务 id 从第 6 步结果里取）
+PATCH {{base}}/projects/{{projectId}}/tasks/换成任务ID
+Content-Type: application/json
+
+{
+  "status": "DONE"
+}
+
+### 13. 删除任务
+DELETE {{base}}/projects/{{projectId}}/tasks/换成任务ID
+
+### 14. 删除项目（级联删除其下所有任务，慎用）
+DELETE {{base}}/projects/换成要删的项目ID
