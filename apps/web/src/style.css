@@ -1,0 +1,12 @@
+@import 'tailwindcss';
+
+/* 全局基础样式 */
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-100 text-slate-800 antialiased;
+}

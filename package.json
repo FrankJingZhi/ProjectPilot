@@ -1,0 +1,25 @@
+{
+  "name": "projectpilot",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AI Project Manager Agent（AI 项目管理智能体）",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev:web": "pnpm --filter @projectpilot/web dev",
+    "dev:server": "pnpm --filter @projectpilot/server start:dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter @projectpilot/server prisma:migrate",
+    "db:studio": "pnpm --filter @projectpilot/server prisma:studio"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2"
+  }
+}

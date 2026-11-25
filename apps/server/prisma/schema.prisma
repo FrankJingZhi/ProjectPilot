@@ -1,0 +1,279 @@
+// ProjectPilot 数据模型
+// 设计要点：
+// 1. tasks 支持父子层级（Epic -> Story -> Task）
+// 2. task_dependencies 独立建表，表达任务间依赖
+// 3. agent_executions 记录每次工具调用的入参、结果、状态与错误，支撑恢复/审计/排查
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== 枚举 ====================
+
+enum ProjectStatus {
+  PLANNING // 规划中
+  ACTIVE // 进行中
+  PAUSED // 已暂停
+  COMPLETED // 已完成
+  ARCHIVED // 已归档
+}
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  MEMBER
+  VIEWER
+}
+
+enum RequirementStatus {
+  DRAFT // 草稿（Agent 分析产出，待确认）
+  CONFIRMED // 已确认
+}
+
+enum TaskType {
+  EPIC
+  STORY
+  TASK
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  DONE
+  CANCELLED
+}
+
+enum TaskPriority {
+  P0
+  P1
+  P2
+  P3
+}
+
+enum DependencyType {
+  FINISH_TO_START // 完成后才能开始（默认）
+  START_TO_START
+  FINISH_TO_FINISH
+}
+
+enum MilestoneStatus {
+  PENDING
+  COMPLETED
+}
+
+enum SessionStatus {
+  ACTIVE // 执行中
+  WAITING_INPUT // 等待用户补充需求
+  WAITING_APPROVAL // 等待人工审批
+  COMPLETED
+  FAILED
+}
+
+enum ExecutionStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+  REJECTED // 被用户拒绝
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+  TOOL
+}
+
+// ==================== 用户与项目 ====================
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  name         String
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  ownedProjects Project[]       @relation("ProjectOwner")
+  memberships   ProjectMember[]
+  agentSessions AgentSession[]
+
+  @@map("users")
+}
+
+model Project {
+  id            String        @id @default(uuid()) @db.Uuid
+  ownerId       String        @db.Uuid
+  name          String
+  description   String?
+  status        ProjectStatus @default(PLANNING)
+  startDate     DateTime?
+  targetEndDate DateTime?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  owner        User            @relation("ProjectOwner", fields: [ownerId], references: [id])
+  members      ProjectMember[]
+  requirements Requirement[]
+  tasks        Task[]
+  milestones   Milestone[]
+  agentSessions AgentSession[]
+
+  @@index([ownerId])
+  @@map("projects")
+}
+
+model ProjectMember {
+  id       String     @id @default(uuid()) @db.Uuid
+  projectId String    @db.Uuid
+  userId   String     @db.Uuid
+  role     MemberRole @default(MEMBER)
+  joinedAt DateTime   @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@map("project_members")
+}
+
+// ==================== 需求与任务 ====================
+
+model Requirement {
+  id        String            @id @default(uuid()) @db.Uuid
+  projectId String            @db.Uuid
+  content   String // 原始需求描述
+  status    RequirementStatus @default(DRAFT)
+  // Agent 结构化分析结果：功能清单、业务规则、验收标准等
+  analysis  Json?
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("requirements")
+}
+
+model Task {
+  id            String       @id @default(uuid()) @db.Uuid
+  projectId     String       @db.Uuid
+  parentId      String?      @db.Uuid
+  title         String
+  description   String?
+  type          TaskType     @default(TASK)
+  status        TaskStatus   @default(TODO)
+  priority      TaskPriority @default(P1)
+  assigneeRole  String? // 负责角色：前端/后端/测试等（个人版先按角色估算）
+  estimatedDays Float? // 估算工期（天）
+  plannedStart  DateTime?
+  plannedEnd    DateTime?
+  actualStart   DateTime?
+  actualEnd     DateTime?
+  sortOrder     Int          @default(0)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  project  Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent   Task?   @relation("TaskHierarchy", fields: [parentId], references: [id])
+  children Task[]  @relation("TaskHierarchy")
+
+  // dependencies：本任务依赖谁；dependents：谁依赖本任务
+  dependencies TaskDependency[] @relation("TaskDependent")
+  dependents   TaskDependency[] @relation("TaskDependency")
+
+  @@index([projectId])
+  @@index([parentId])
+  @@map("tasks")
+}
+
+model TaskDependency {
+  id              String         @id @default(uuid()) @db.Uuid
+  taskId          String         @db.Uuid // 依赖方（后置任务）
+  dependsOnTaskId String         @db.Uuid // 被依赖方（前置任务）
+  type            DependencyType @default(FINISH_TO_START)
+  createdAt       DateTime       @default(now())
+
+  task          Task @relation("TaskDependent", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOnTask Task @relation("TaskDependency", fields: [dependsOnTaskId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnTaskId])
+  @@map("task_dependencies")
+}
+
+model Milestone {
+  id          String          @id @default(uuid()) @db.Uuid
+  projectId   String          @db.Uuid
+  name        String
+  description String?
+  dueDate     DateTime
+  status      MilestoneStatus @default(PENDING)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("milestones")
+}
+
+// ==================== Agent 会话与执行审计 ====================
+
+model AgentSession {
+  id        String        @id @default(uuid()) @db.Uuid
+  projectId String        @db.Uuid
+  userId    String        @db.Uuid
+  title     String?
+  status    SessionStatus @default(ACTIVE)
+  // LangGraph 状态快照引用，用于执行恢复
+  state     Json?
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  project    Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user       User             @relation(fields: [userId], references: [id])
+  messages   AgentMessage[]
+  executions AgentExecution[]
+
+  @@index([projectId])
+  @@map("agent_sessions")
+}
+
+model AgentExecution {
+  id         String          @id @default(uuid()) @db.Uuid
+  sessionId  String          @db.Uuid
+  toolName   String // 工具名，如 create_task
+  input      Json // 工具入参
+  output     Json? // 工具返回
+  status     ExecutionStatus @default(PENDING)
+  error      String? // 错误信息
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime        @default(now())
+
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("agent_executions")
+}
+
+model AgentMessage {
+  id         String      @id @default(uuid()) @db.Uuid
+  sessionId  String      @db.Uuid
+  role       MessageRole
+  content    String
+  toolCallId String? // 关联工具调用
+  metadata   Json?
+  createdAt  DateTime    @default(now())
+
+  session AgentSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
+  @@map("agent_messages")
+}
