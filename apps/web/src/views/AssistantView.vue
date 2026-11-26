@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 import { apiGet, apiPost } from '@/api/client';
 import type {
+  AgentEvent,
   AgentSessionDetail,
   AgentSessionSummary,
   ApproveResult,
   PlanningResult,
   Project,
+  StartPlanResult,
 } from '@/api/types';
 import { TASK_PRIORITY_LABELS, TASK_TYPE_LABELS } from '@/api/types';
 
-// AI 助手：需求输入 → 澄清问答 → 计划预览 → 人工审批入库（SSE 流式待后续增量）
+// AI 助手：需求输入 → SSE 实时进度 → 澄清问答 → 计划预览 → 人工审批入库
 const projects = ref<Project[]>([]);
 const projectId = ref('');
 const requirement = ref('');
@@ -23,6 +25,17 @@ const sessionDetail = ref<AgentSessionDetail | null>(null);
 const answers = ref('');
 const approving = ref(false);
 const applyMsg = ref<string | null>(null);
+const progress = ref<{ toolName: string; status: string }[]>([]);
+let eventSource: EventSource | null = null;
+let sseTimer: ReturnType<typeof setTimeout> | null = null;
+
+// 节点工具名 → 展示文案
+const toolLabel: Record<string, string> = {
+  analyze_requirements: '需求分析',
+  generate_plan: '生成开发计划',
+  validate_plan: '校验计划',
+  apply_plan: '审批入库',
+};
 
 onMounted(async () => {
   projects.value = await apiGet<Project[]>('/projects');
@@ -44,39 +57,89 @@ async function startPlan(): Promise<void> {
   errorMsg.value = null;
   result.value = null;
   sessionDetail.value = null;
+  progress.value = [];
   try {
-    result.value = await apiPost<PlanningResult>(`/projects/${projectId.value}/agent/plan`, {
+    const r = await apiPost<StartPlanResult>(`/projects/${projectId.value}/agent/plan`, {
       requirement: requirement.value,
     });
-    await loadSessions();
-    await openSession(result.value.sessionId);
+    watchSession(r.sessionId);
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : '规划失败';
-  } finally {
     running.value = false;
   }
 }
 
+// 订阅会话 SSE：实时节点进度 → 最终结果/错误
+function watchSession(sessionId: string): void {
+  closeStream();
+  eventSource = new EventSource(`/api/agent/sessions/${sessionId}/events`);
+  // 兜底：3 分钟无终态则断开，提示查看历史会话
+  sseTimer = setTimeout(() => {
+    if (!running.value) return;
+    closeStream();
+    running.value = false;
+    errorMsg.value = '等待超时，请稍后在历史会话中查看结果';
+    void loadSessions();
+  }, 180000);
+  eventSource.onmessage = (ev) => {
+    const event = JSON.parse(ev.data as string) as AgentEvent;
+    if (event.type === 'node') {
+      progress.value.push({ toolName: event.toolName, status: event.status });
+      return;
+    }
+    closeStream();
+    running.value = false;
+    if (event.type === 'result') {
+      result.value = event.result;
+    } else {
+      errorMsg.value = event.message;
+    }
+    void loadSessions();
+    void openSession(sessionId);
+  };
+  eventSource.onerror = () => {
+    if (!running.value) return;
+    closeStream();
+    running.value = false;
+    errorMsg.value = '实时进度连接中断，请稍后在历史会话中查看结果';
+    void loadSessions();
+  };
+}
+
+function closeStream(): void {
+  eventSource?.close();
+  eventSource = null;
+  if (sseTimer) {
+    clearTimeout(sseTimer);
+    sseTimer = null;
+  }
+}
+
+onUnmounted(closeStream);
+
 async function submitAnswers(): Promise<void> {
   if (!result.value) return;
+  const sessionId = result.value.sessionId;
   running.value = true;
   errorMsg.value = null;
+  progress.value = [];
   try {
-    result.value = await apiPost<PlanningResult>(
-      `/agent/sessions/${result.value.sessionId}/reply`,
-      { answers: answers.value },
-    );
+    await apiPost<StartPlanResult>(`/agent/sessions/${sessionId}/reply`, {
+      answers: answers.value,
+    });
     answers.value = '';
-    await loadSessions();
-    await openSession(result.value.sessionId);
+    result.value = null;
+    watchSession(sessionId);
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : '提交失败';
-  } finally {
     running.value = false;
   }
 }
 
 async function openSession(sessionId: string): Promise<void> {
+  closeStream();
+  running.value = false;
+  progress.value = [];
   applyMsg.value = null;
   sessionDetail.value = await apiGet<AgentSessionDetail>(`/agent/sessions/${sessionId}`);
   // 历史会话：从 state 恢复展示
@@ -159,13 +222,15 @@ const sessionStatusLabel: Record<string, string> = {
         <div class="mt-3 space-y-3">
           <select
             v-model="projectId"
-            class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            :disabled="running"
+            class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none disabled:opacity-50"
             @change="loadSessions"
           >
             <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
           </select>
           <textarea
             v-model="requirement"
+            :disabled="running"
             rows="6"
             maxlength="10000"
             placeholder="例如：我要开发一个在线 Markdown 编辑器，使用 Vue 3 + NestJS，支持编辑、实时预览、文档保存、用户登录和分享，预计两周完成…"
@@ -207,6 +272,25 @@ const sessionStatusLabel: Record<string, string> = {
 
     <!-- 右两栏：结果展示 -->
     <div class="space-y-4 xl:col-span-2">
+      <!-- 实时进度（SSE） -->
+      <div v-if="running" class="rounded-xl border border-blue-100 bg-blue-50/50 p-5">
+        <h2 class="text-base font-semibold text-blue-800">AI 正在工作…</h2>
+        <ul class="mt-3 space-y-2 text-sm text-slate-700">
+          <li v-for="(p, i) in progress" :key="i" class="flex items-center gap-2">
+            <span :class="p.status === 'SUCCESS' ? 'text-emerald-600' : 'text-rose-600'">
+              {{ p.status === 'SUCCESS' ? '✓' : '✗' }}
+            </span>
+            <span>{{ toolLabel[p.toolName] ?? p.toolName }}</span>
+          </li>
+          <li class="flex items-center gap-2 text-slate-500">
+            <span
+              class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-blue-400 border-t-transparent"
+            ></span>
+            处理中…
+          </li>
+        </ul>
+      </div>
+
       <!-- 澄清问题 -->
       <div
         v-if="result?.status === 'WAITING_INPUT'"

@@ -60,7 +60,8 @@ describe('AgentService', () => {
       key === 'OPENAI_API_KEY' ? 'test-key' : fallback,
     ),
   };
-  const service = new AgentService(prisma as never, config as never);
+  const events = { begin: vi.fn(), publish: vi.fn(), complete: vi.fn() };
+  const service = new AgentService(prisma as never, config as never, events as never);
 
   // 待审批会话 fixture
   function waitingSession(plan: ProjectPlan | null = validPlan()) {
@@ -234,12 +235,50 @@ describe('AgentService', () => {
       });
 
       const result = await service.startPlanning('p1', '做一个任务管理系统');
-      expect(result.status).toBe('PLANNED');
-      expect(prisma.agentSession.update).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ status: 'WAITING_APPROVAL' }),
-        }),
+      // 接口立即返回，工作流在后台异步执行
+      expect(result.status).toBe('ACTIVE');
+      await vi.waitFor(() => {
+        expect(prisma.agentSession.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ status: 'WAITING_APPROVAL' }),
+          }),
+        );
+      });
+      // complete 在 finally 中最后执行，等它出现即可保证 publish 已完成
+      await vi.waitFor(() => {
+        expect(events.complete).toHaveBeenCalledWith('s1');
+      });
+      expect(events.publish).toHaveBeenCalledWith(
+        's1',
+        expect.objectContaining({ type: 'result' }),
       );
+    });
+
+    it('工作流失败时会话置 FAILED 并推送错误事件', async () => {
+      prisma.project.findUnique.mockResolvedValue({
+        id: 'p1',
+        name: '项目',
+        description: null,
+        targetEndDate: null,
+        tasks: [],
+      });
+      prisma.agentSession.create.mockResolvedValue({ id: 's1' });
+      invokeMock.mockRejectedValue(new Error('模型调用失败'));
+
+      await service.startPlanning('p1', '需求');
+      await vi.waitFor(() => {
+        expect(prisma.agentSession.update).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ status: 'FAILED' }),
+          }),
+        );
+      });
+      await vi.waitFor(() => {
+        expect(events.publish).toHaveBeenCalledWith('s1', {
+          type: 'error',
+          message: '模型调用失败',
+        });
+      });
     });
   });
 });

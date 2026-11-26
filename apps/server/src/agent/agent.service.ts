@@ -9,6 +9,7 @@ import { ChatOpenAI } from '@langchain/openai';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { DEFAULT_USER_ID } from '../users/users.constants';
+import { AgentEventsService } from './agent-events.service';
 import { buildPlannerGraph, type AuditEntry } from './planner.graph';
 import { validatePlan } from './plan-validator';
 import type { ProjectPlan, RequirementAnalysis } from './schemas';
@@ -42,10 +43,14 @@ export class AgentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly events: AgentEventsService,
   ) {}
 
   // 发起规划：创建会话 → 记录用户消息 → 运行工作流
-  async startPlanning(projectId: string, requirement: string): Promise<PlanningResult> {
+  async startPlanning(
+    projectId: string,
+    requirement: string,
+  ): Promise<{ sessionId: string; status: 'ACTIVE' }> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       include: { tasks: { select: { title: true, type: true, status: true } } },
@@ -62,11 +67,16 @@ export class AgentService {
       },
     });
     await this.addMessage(session.id, 'USER', requirement);
-    return this.runGraph(session.id, requirement, this.buildContext(project));
+    // 异步执行工作流，进度与结果通过 SSE 推送，接口立即返回会话 ID
+    void this.runGraph(session.id, requirement, this.buildContext(project));
+    return { sessionId: session.id, status: 'ACTIVE' };
   }
 
   // 回答澄清问题：合并补充信息后重新运行工作流
-  async reply(sessionId: string, answers: string): Promise<PlanningResult> {
+  async reply(
+    sessionId: string,
+    answers: string,
+  ): Promise<{ sessionId: string; status: 'ACTIVE' }> {
     const session = await this.prisma.agentSession.findUnique({
       where: { id: sessionId },
       include: {
@@ -86,7 +96,8 @@ export class AgentService {
       where: { id: sessionId },
       data: { status: 'ACTIVE' },
     });
-    return this.runGraph(sessionId, requirement, this.buildContext(session.project));
+    void this.runGraph(sessionId, requirement, this.buildContext(session.project));
+    return { sessionId, status: 'ACTIVE' };
   }
 
   // 会话列表
@@ -308,9 +319,17 @@ export class AgentService {
     sessionId: string,
     requirement: string,
     projectContext: string,
-  ): Promise<PlanningResult> {
-    // 审计回调：每个节点执行都落库，保证可追溯
-    const audit = (entry: AuditEntry): Promise<void> => this.addExecution(sessionId, entry);
+  ): Promise<void> {
+    // 开启本轮 SSE 通道；审计回调同时落库并推送节点进度
+    this.events.begin(sessionId);
+    const audit = async (entry: AuditEntry): Promise<void> => {
+      await this.addExecution(sessionId, entry);
+      this.events.publish(sessionId, {
+        type: 'node',
+        toolName: entry.toolName,
+        status: entry.status,
+      });
+    };
 
     try {
       const model = this.createModel();
@@ -331,7 +350,11 @@ export class AgentService {
           'ASSISTANT',
           `需求还需要澄清以下问题：\n${questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}`,
         );
-        return { sessionId, status: 'WAITING_INPUT', analysis, questions };
+        this.events.publish(sessionId, {
+          type: 'result',
+          result: { sessionId, status: 'WAITING_INPUT', analysis, questions },
+        });
+        return;
       }
 
       // 计划生成完毕：保存提案并等待人工审批（审批通过后才写入真实任务）
@@ -347,16 +370,21 @@ export class AgentService {
         `已生成开发计划：${plan?.tasks.length ?? 0} 个任务、${plan?.milestones.length ?? 0} 个里程碑。等待用户审批后入库。`,
         { plan },
       );
-      return { sessionId, status: 'PLANNED', analysis, plan };
+      this.events.publish(sessionId, {
+        type: 'result',
+        result: { sessionId, status: 'PLANNED', analysis, plan },
+      });
     } catch (err) {
+      // 异步执行：错误不再抛给 HTTP，而是落库并通过 SSE 推送
       const message = err instanceof Error ? err.message : String(err);
       await this.prisma.agentSession.update({
         where: { id: sessionId },
         data: { status: 'FAILED' },
       });
       await this.addMessage(sessionId, 'ASSISTANT', `规划失败：${message}`);
-      if (err instanceof ServiceUnavailableException) throw err;
-      throw new BadRequestException(`Agent 规划失败：${message}`);
+      this.events.publish(sessionId, { type: 'error', message });
+    } finally {
+      this.events.complete(sessionId);
     }
   }
 

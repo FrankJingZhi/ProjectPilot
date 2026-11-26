@@ -113,6 +113,18 @@ export interface PlanningResult {
   plan?: ProjectPlan | null;
 }
 
+// 发起规划/补充回答的即时回执（最终结果通过 SSE 推送）
+export interface StartPlanResult {
+  sessionId: string;
+  status: 'ACTIVE';
+}
+
+// SSE 推送事件：节点进度 / 最终结果 / 错误
+export type AgentEvent =
+  | { type: 'node'; toolName: string; status: string }
+  | { type: 'result'; result: PlanningResult }
+  | { type: 'error'; message: string };
+
 // 审批入库结果
 export interface ApproveResult {
   sessionId: string;
