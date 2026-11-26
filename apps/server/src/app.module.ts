@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { AgentModule } from './agent/agent.module';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { ProjectsModule } from './projects/projects.module';
@@ -15,6 +16,7 @@ import { UsersModule } from './users/users.module';
     HealthModule,
     ProjectsModule,
     TasksModule,
+    AgentModule,
   ],
 })
 export class AppModule {}

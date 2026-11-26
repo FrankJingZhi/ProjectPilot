@@ -76,3 +76,62 @@ export const TASK_PRIORITY_LABELS: Record<TaskPriority, string> = {
   P2: 'P2 中',
   P3: 'P3 低',
 };
+
+// ==================== Agent ====================
+
+export interface RequirementAnalysis {
+  summary: string;
+  features: string[];
+  constraints: string[];
+  acceptanceCriteria: string[];
+  complete: boolean;
+  questions: string[];
+}
+
+export interface PlannedTask {
+  title: string;
+  description: string;
+  type: TaskType;
+  priority: TaskPriority;
+  assigneeRole: string;
+  estimatedDays: number;
+  parentIndex: number | null;
+  dependsOnIndexes: number[];
+}
+
+export interface ProjectPlan {
+  tasks: PlannedTask[];
+  milestones: { name: string; description: string; offsetDays: number }[];
+  risks: string[];
+}
+
+export interface PlanningResult {
+  sessionId: string;
+  status: 'WAITING_INPUT' | 'PLANNED';
+  analysis: RequirementAnalysis | null;
+  questions?: string[];
+  plan?: ProjectPlan | null;
+}
+
+export interface AgentSessionSummary {
+  id: string;
+  title: string;
+  status: 'ACTIVE' | 'WAITING_INPUT' | 'WAITING_APPROVAL' | 'COMPLETED' | 'FAILED';
+  createdAt: string;
+}
+
+export interface AgentSessionDetail extends AgentSessionSummary {
+  state: {
+    requirement?: string;
+    analysis?: RequirementAnalysis | null;
+    plan?: ProjectPlan | null;
+  } | null;
+  messages: { id: string; role: string; content: string; createdAt: string }[];
+  executions: {
+    id: string;
+    toolName: string;
+    status: string;
+    error: string | null;
+    createdAt: string;
+  }[];
+}

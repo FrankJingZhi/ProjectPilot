@@ -34,4 +34,3 @@ generate_project_report / analyze_project_risk
 - V1：智能项目规划（当前）
 - V2：智能项目管理（进度分析、延期风险、自动报告、对话改任务）
 - V3：研发工具集成（GitLab / GitHub / CI / 测试 / IM）
-
