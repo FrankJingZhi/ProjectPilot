@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { apiGet, apiPost } from '@/api/client';
-import type { Milestone, Project, ScheduleResult, Task } from '@/api/types';
+import type { Milestone, Project, RiskLevel, RiskReport, ScheduleResult, Task } from '@/api/types';
 import { TASK_STATUS_LABELS, TASK_TYPE_LABELS } from '@/api/types';
 
 // 项目计划：自动排期 + 甘特图 + 里程碑（第 6 步）
@@ -13,6 +13,7 @@ const projectId = ref('');
 const project = ref<(Project & { milestones: Milestone[] }) | null>(null);
 const tasks = ref<Task[]>([]);
 const schedule = ref<ScheduleResult | null>(null);
+const report = ref<RiskReport | null>(null);
 const scheduling = ref(false);
 const errorMsg = ref<string | null>(null);
 
@@ -28,8 +29,10 @@ async function loadAll(): Promise<void> {
   if (!projectId.value) return;
   errorMsg.value = null;
   schedule.value = null;
+  report.value = null;
   project.value = await apiGet(`/projects/${projectId.value}`);
   tasks.value = await apiGet<Task[]>(`/projects/${projectId.value}/tasks`);
+  report.value = await apiGet<RiskReport>(`/projects/${projectId.value}/report`);
 }
 
 // 触发自动排期：重算全部任务计划起止并刷新
@@ -119,6 +122,16 @@ const overdueTarget = computed(() => {
   if (!schedule.value || !project.value?.targetEndDate) return false;
   return utcDay(schedule.value.projectEnd) > utcDay(project.value.targetEndDate);
 });
+
+// 风险等级展示
+const levelLabel: Record<RiskLevel, string> = { HIGH: '高', MEDIUM: '中', LOW: '低' };
+function riskClass(level: RiskLevel): string {
+  return level === 'HIGH'
+    ? 'bg-rose-50 text-rose-700'
+    : level === 'MEDIUM'
+      ? 'bg-amber-50 text-amber-700'
+      : 'bg-slate-50 text-slate-600';
+}
 
 // 任务条配色：按类型区分，关键路径加红色描边
 function barClass(t: Task): string {
@@ -259,6 +272,36 @@ function barClass(t: Task): string {
         <span>🚩 里程碑</span>
         <span><span class="mr-1 inline-block h-3 border-l-2 border-rose-400"></span>今天</span>
       </div>
+    </div>
+
+    <!-- 风险报告 -->
+    <div v-if="report" class="rounded-xl border border-slate-200 bg-white p-5">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h3 class="text-sm font-semibold text-slate-600">风险报告</h3>
+        <span class="text-xs text-slate-400">
+          完成 {{ report.summary.done }}/{{ report.summary.total }} · 延期
+          {{ report.summary.overdue }} · 阻塞 {{ report.summary.blocked }}
+        </span>
+      </div>
+      <div class="mt-2 h-2 w-full rounded-full bg-slate-100">
+        <div
+          class="h-2 rounded-full bg-emerald-500"
+          :style="{ width: `${report.summary.progressPercent}%` }"
+        ></div>
+      </div>
+      <p class="mt-1 text-xs text-slate-400">整体进度 {{ report.summary.progressPercent }}%</p>
+      <ul v-if="report.risks.length > 0" class="mt-3 space-y-2">
+        <li
+          v-for="(r, i) in report.risks"
+          :key="i"
+          class="flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
+          :class="riskClass(r.level)"
+        >
+          <span class="shrink-0 font-semibold">{{ levelLabel[r.level] }}</span>
+          <span>[{{ r.category }}] {{ r.message }}</span>
+        </li>
+      </ul>
+      <p v-else class="mt-3 text-xs text-emerald-600">✓ 未发现明显风险</p>
     </div>
 
     <!-- 未排期任务 -->

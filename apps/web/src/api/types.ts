@@ -104,6 +104,29 @@ export interface ScheduleResult {
   tasks: ScheduledTask[];
 }
 
+export type RiskLevel = 'HIGH' | 'MEDIUM' | 'LOW';
+
+export interface RiskItem {
+  level: RiskLevel;
+  category: string;
+  message: string;
+}
+
+export interface RiskReport {
+  projectId: string;
+  generatedAt: string;
+  summary: {
+    total: number;
+    done: number;
+    inProgress: number;
+    blocked: number;
+    overdue: number;
+    unscheduled: number;
+    progressPercent: number;
+  };
+  risks: RiskItem[];
+}
+
 // ==================== Agent ====================
 
 export interface RequirementAnalysis {
