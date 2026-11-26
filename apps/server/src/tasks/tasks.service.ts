@@ -21,6 +21,9 @@ export class TasksService {
     if (dto.parentId) {
       await this.validateParent(projectId, dto.parentId, dto.type ?? 'TASK');
     }
+    if (dto.assigneeId) {
+      await this.validateAssignee(projectId, dto.assigneeId);
+    }
     return this.prisma.task.create({
       data: {
         projectId,
@@ -30,6 +33,7 @@ export class TasksService {
         priority: dto.priority ?? 'P1',
         parentId: dto.parentId ?? null,
         assigneeRole: dto.assigneeRole,
+        assigneeId: dto.assigneeId ?? null,
         estimatedDays: dto.estimatedDays,
         plannedStart: dto.plannedStart ? new Date(dto.plannedStart) : null,
         plannedEnd: dto.plannedEnd ? new Date(dto.plannedEnd) : null,
@@ -41,9 +45,10 @@ export class TasksService {
   async findAll(projectId: string, query: QueryTaskDto) {
     await this.ensureProject(projectId);
     return this.prisma.task.findMany({
-      where: { projectId, status: query.status, type: query.type },
+      where: { projectId, status: query.status, type: query.type, assigneeId: query.assigneeId },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
       include: {
+        assignee: { select: { id: true, name: true, email: true } },
         _count: { select: { children: true } },
         dependencies: {
           include: { dependsOnTask: { select: { id: true, title: true, status: true } } },
@@ -56,6 +61,7 @@ export class TasksService {
     const task = await this.prisma.task.findFirst({
       where: { id, projectId },
       include: {
+        assignee: { select: { id: true, name: true, email: true } },
         children: { orderBy: { sortOrder: 'asc' } },
         dependencies: { include: { dependsOnTask: true } },
         dependents: { include: { task: true } },
@@ -79,6 +85,9 @@ export class TasksService {
         await this.assertNotDescendant(projectId, id, dto.parentId);
       }
     }
+    if (dto.assigneeId) {
+      await this.validateAssignee(projectId, dto.assigneeId);
+    }
     const data: Prisma.TaskUpdateInput = {
       title: dto.title,
       description: dto.description,
@@ -95,6 +104,12 @@ export class TasksService {
           : dto.parentId
             ? { connect: { id: dto.parentId } }
             : { disconnect: true },
+      assignee:
+        dto.assigneeId === undefined
+          ? undefined
+          : dto.assigneeId
+            ? { connect: { id: dto.assigneeId } }
+            : { disconnect: true },
     };
     return this.prisma.task.update({ where: { id }, data });
   }
@@ -104,6 +119,16 @@ export class TasksService {
     await this.findOne(projectId, id);
     await this.prisma.task.delete({ where: { id } });
     return { deleted: true };
+  }
+
+  // 校验指派人：必须是该项目成员
+  private async validateAssignee(projectId: string, userId: string) {
+    const member = await this.prisma.projectMember.findUnique({
+      where: { projectId_userId: { projectId, userId } },
+    });
+    if (!member) {
+      throw new BadRequestException('指派人必须是该项目成员');
+    }
   }
 
   private async ensureProject(projectId: string) {

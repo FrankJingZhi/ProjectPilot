@@ -7,6 +7,7 @@ export type TaskPriority = 'P0' | 'P1' | 'P2' | 'P3';
 
 export interface Project {
   id: string;
+  ownerId: string;
   name: string;
   description: string | null;
   status: ProjectStatus;
@@ -37,6 +38,8 @@ export interface Task {
   status: TaskStatus;
   priority: TaskPriority;
   assigneeRole: string | null;
+  assigneeId: string | null;
+  assignee?: { id: string; name: string; email: string } | null;
   estimatedDays: number | null;
   plannedStart: string | null;
   plannedEnd: string | null;
@@ -205,4 +208,37 @@ export interface AgentSessionDetail extends AgentSessionSummary {
     error: string | null;
     createdAt: string;
   }[];
+}
+
+// 当前登录用户
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  isAdmin: boolean;
+}
+
+// 项目成员角色
+export type MemberRole = 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER';
+
+export interface ProjectMember {
+  id: string;
+  projectId: string;
+  userId: string;
+  role: MemberRole;
+  joinedAt: string;
+  user: { id: string; name: string; email: string };
+}
+
+export const MEMBER_ROLE_LABELS: Record<MemberRole, string> = {
+  OWNER: '拥有者',
+  ADMIN: '管理员',
+  MEMBER: '成员',
+  VIEWER: '只读',
+};
+
+// 管理员用户管理页的用户条目
+export interface ManagedUser extends AuthUser {
+  disabled: boolean;
+  createdAt: string;
 }

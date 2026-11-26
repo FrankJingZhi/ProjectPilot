@@ -1,10 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router';
+import { getToken } from '@/api/client';
 import AppLayout from '@/layouts/AppLayout.vue';
 
-// 第一版四个主页面 + 项目列表
+// 登录页 + 五个主页面
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('@/views/LoginView.vue'),
+      meta: { title: '登录' },
+    },
     {
       path: '/',
       component: AppLayout,
@@ -46,7 +53,25 @@ export const router = createRouter({
           component: () => import('@/views/PlanView.vue'),
           meta: { title: '项目计划' },
         },
+        {
+          path: 'admin/users',
+          name: 'admin-users',
+          component: () => import('@/views/UsersAdminView.vue'),
+          meta: { title: '用户管理' },
+        },
       ],
     },
   ],
+});
+
+// 登录守卫：未登录一律去登录页；已登录访问登录页则回仪表盘
+router.beforeEach((to) => {
+  const loggedIn = Boolean(getToken());
+  if (to.name !== 'login' && !loggedIn) {
+    return { name: 'login', query: { redirect: to.fullPath } };
+  }
+  if (to.name === 'login' && loggedIn) {
+    return { name: 'dashboard' };
+  }
+  return true;
 });

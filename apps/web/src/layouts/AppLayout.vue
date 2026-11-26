@@ -1,18 +1,34 @@
 <script setup lang="ts">
-import { computed } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, onMounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { useAuthStore } from '@/stores/auth';
 
 const route = useRoute();
+const router = useRouter();
+const auth = useAuthStore();
 const pageTitle = computed(() => (route.meta.title as string) ?? 'ProjectPilot');
 
-// 侧边导航：对应第一版四个主页面
-const navItems = [
+// 刷新页面后恢复当前用户信息
+onMounted(() => {
+  if (!auth.user) {
+    void auth.fetchMe();
+  }
+});
+
+function logout(): void {
+  auth.logout();
+  void router.replace({ name: 'login' });
+}
+
+// 侧边导航：主页面 + 管理员专属的用户管理
+const navItems = computed(() => [
   { to: '/dashboard', label: '项目仪表盘', icon: '📊' },
   { to: '/projects', label: '项目列表', icon: '📁' },
   { to: '/tasks', label: '任务管理', icon: '🗂️' },
   { to: '/assistant', label: 'AI 助手', icon: '🤖' },
   { to: '/plan', label: '项目计划', icon: '📅' },
-];
+  ...(auth.user?.isAdmin ? [{ to: '/admin/users', label: '用户管理', icon: '👥' }] : []),
+]);
 </script>
 
 <template>
@@ -38,7 +54,29 @@ const navItems = [
           <span>{{ item.label }}</span>
         </RouterLink>
       </nav>
-      <div class="px-5 py-4 text-xs text-slate-500">V1 MVP · 第 1 步骨架</div>
+      <!-- 当前登录用户 -->
+      <div class="border-t border-slate-800 px-5 py-4">
+        <div class="flex items-center justify-between">
+          <div class="min-w-0">
+            <div class="truncate text-sm text-slate-200">
+              {{ auth.user?.name ?? '加载中…' }}
+              <span
+                v-if="auth.user?.isAdmin"
+                class="ml-1 rounded bg-blue-600/30 px-1.5 py-0.5 text-[10px] text-blue-300"
+                >管理员</span
+              >
+            </div>
+            <div class="truncate text-xs text-slate-500">{{ auth.user?.email }}</div>
+          </div>
+          <button
+            class="ml-2 shrink-0 text-xs text-slate-400 transition-colors hover:text-white"
+            title="退出登录"
+            @click="logout"
+          >
+            退出
+          </button>
+        </div>
+      </div>
     </aside>
 
     <!-- 主区域 -->

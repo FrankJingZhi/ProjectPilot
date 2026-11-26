@@ -4,7 +4,7 @@ services:
     container_name: projectpilot-postgres
     environment:
       POSTGRES_USER: projectpilot
-      POSTGRES_PASSWORD: projectpilot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-projectpilot}
       POSTGRES_DB: projectpilot
     ports:
       - '5433:5432'
@@ -15,6 +15,42 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    restart: unless-stopped
+
+  server:
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    container_name: projectpilot-server
+    environment:
+      DATABASE_URL: postgresql://projectpilot:${POSTGRES_PASSWORD:-projectpilot}@postgres:5432/projectpilot?schema=public
+      PORT: '3000'
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:8080}
+      JWT_SECRET: ${JWT_SECRET:?请在根目录 .env 配置 JWT_SECRET}
+      ADMIN_INITIAL_PASSWORD: ${ADMIN_INITIAL_PASSWORD:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/api/health || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: projectpilot-web
+    ports:
+      - '${WEB_PORT:-8080}:80'
+    depends_on:
+      - server
+    restart: unless-stopped
 
 volumes:
   pgdata:

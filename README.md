@@ -45,3 +45,32 @@ docs/       开发路线与设计决策
 ## 开发路线
 
 见 [docs/roadmap.md](docs/roadmap.md)。
+
+## 团队登录（V1.1 起）
+
+- 所有业务接口需要登录；初始管理员账号 `owner@projectpilot.local`，密码取 `.env` 中的 `ADMIN_INITIAL_PASSWORD`（仅管理员密码为空时生效）。
+- `JWT_SECRET` 必填：随机长字符串，可用 `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` 生成。
+- 普通成员账号由管理员开通（阶段 2 提供管理页面）。
+- SSE 实时推送使用 60 秒一次性票据鉴权，长期 JWT 不会出现在 URL 中。
+
+## Docker 一键运行（团队试用推荐）
+
+```powershell
+# 1. 准备配置：复制根目录 .env.example 为 .env，填写 JWT_SECRET（必填）等
+Copy-Item .env.example .env
+
+# 2. 构建并启动三个容器（postgres / server / web）
+docker compose up -d --build
+
+# 3. 浏览器访问 http://localhost:8080
+#    初始管理员：owner@projectpilot.local，密码为 .env 中的 ADMIN_INITIAL_PASSWORD
+```
+
+说明：
+
+- server 容器启动时自动执行 `prisma migrate deploy`，无需手动迁移。
+- 前端由 nginx 托管并把 `/api` 反代到 server（SSE 已关闭缓冲）。
+- 数据保存在 `pgdata` 卷中，重启/重建容器不丢数据。
+- 备份：`.\scripts\backup.ps1`（Windows）/ `./scripts/backup.sh`（Linux），默认保留最近 14 份，建议配成每日定时任务。
+- 恢复：`Get-Content backups\xxx.sql | docker exec -i projectpilot-postgres psql -U projectpilot projectpilot`
+- 上服务器前务必修改：`POSTGRES_PASSWORD`、`JWT_SECRET`、`ADMIN_INITIAL_PASSWORD`。

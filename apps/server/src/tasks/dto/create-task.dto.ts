@@ -37,6 +37,11 @@ export class CreateTaskDto {
   @Length(0, 50)
   assigneeRole?: string;
 
+  // 指派给具体成员；null 表示取消指派
+  @IsOptional()
+  @IsUUID()
+  assigneeId?: string | null;
+
   @IsOptional()
   @IsNumber()
   @Min(0)
