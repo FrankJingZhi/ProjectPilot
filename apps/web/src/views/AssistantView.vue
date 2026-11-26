@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue';
-import { apiGet, apiPost } from '@/api/client';
+import { apiGet, apiPost, apiSseUrl } from '@/api/client';
 import type {
   AgentEvent,
   AgentSessionDetail,
@@ -62,7 +62,7 @@ async function startPlan(): Promise<void> {
     const r = await apiPost<StartPlanResult>(`/projects/${projectId.value}/agent/plan`, {
       requirement: requirement.value,
     });
-    watchSession(r.sessionId);
+    await watchSession(r.sessionId);
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : '规划失败';
     running.value = false;
@@ -70,9 +70,9 @@ async function startPlan(): Promise<void> {
 }
 
 // 订阅会话 SSE：实时节点进度 → 最终结果/错误
-function watchSession(sessionId: string): void {
+async function watchSession(sessionId: string): Promise<void> {
   closeStream();
-  eventSource = new EventSource(`/api/agent/sessions/${sessionId}/events`);
+  eventSource = new EventSource(await apiSseUrl(`/agent/sessions/${sessionId}/events`));
   // 兜底：3 分钟无终态则断开，提示查看历史会话
   sseTimer = setTimeout(() => {
     if (!running.value) return;
@@ -129,7 +129,7 @@ async function submitAnswers(): Promise<void> {
     });
     answers.value = '';
     result.value = null;
-    watchSession(sessionId);
+    await watchSession(sessionId);
   } catch (err) {
     errorMsg.value = err instanceof Error ? err.message : '提交失败';
     running.value = false;

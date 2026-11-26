@@ -13,20 +13,34 @@ describe('ProjectsService', () => {
       delete: vi.fn(),
     },
   };
-  const users = { ensureDefaultUser: vi.fn() };
-  const service = new ProjectsService(prisma as never, users as never);
+  const service = new ProjectsService(prisma as never);
+  const normalUser = { id: 'user-1', email: 'u@x.local', isAdmin: false };
+  const adminUser = { id: 'admin-1', email: 'a@x.local', isAdmin: true };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    users.ensureDefaultUser.mockResolvedValue({ id: 'user-1' });
   });
 
-  it('创建项目时挂载默认用户为 OWNER', async () => {
+  it('创建项目时当前用户成为 OWNER', async () => {
     prisma.project.create.mockImplementation(({ data }) => Promise.resolve({ id: 'p1', ...data }));
-    await service.create({ name: '测试项目' });
+    await service.create({ name: '测试项目' }, 'user-1');
     const arg = prisma.project.create.mock.calls[0][0];
     expect(arg.data.ownerId).toBe('user-1');
     expect(arg.data.members.create).toEqual({ userId: 'user-1', role: 'OWNER' });
+  });
+
+  it('普通用户列表只查自己拥有或参与的项目', async () => {
+    prisma.project.findMany.mockResolvedValue([]);
+    await service.findAll(normalUser);
+    expect(prisma.project.findMany.mock.calls[0][0].where).toEqual({
+      OR: [{ ownerId: 'user-1' }, { members: { some: { userId: 'user-1' } } }],
+    });
+  });
+
+  it('系统管理员列表不加归属过滤', async () => {
+    prisma.project.findMany.mockResolvedValue([]);
+    await service.findAll(adminUser);
+    expect(prisma.project.findMany.mock.calls[0][0].where).toBeUndefined();
   });
 
   it('项目不存在时抛出 NotFoundException', async () => {

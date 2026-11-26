@@ -1,23 +1,47 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { hashPassword } from '../auth/password';
 import { PrismaService } from '../prisma/prisma.service';
-import { DEFAULT_USER_ID } from './users.constants';
+import { ADMIN_USER_ID } from './users.constants';
 
 @Injectable()
-export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+export class UsersService implements OnModuleInit {
+  private readonly logger = new Logger(UsersService.name);
 
-  // 确保默认本地用户存在（个人版：所有项目暂挂在该用户名下）
-  async ensureDefaultUser() {
-    return this.prisma.user.upsert({
-      where: { id: DEFAULT_USER_ID },
-      update: {},
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
+  ) {}
+
+  // 启动时初始化管理员账号（幂等）：个人版默认用户升级为系统管理员
+  async onModuleInit(): Promise<void> {
+    const admin = await this.prisma.user.upsert({
+      where: { id: ADMIN_USER_ID },
+      update: { isAdmin: true },
       create: {
-        id: DEFAULT_USER_ID,
+        id: ADMIN_USER_ID,
         email: 'owner@projectpilot.local',
-        name: '本地用户',
-        // 第一版无登录认证，密码字段留空，后续引入认证时补齐
+        name: '系统管理员',
         passwordHash: '',
+        isAdmin: true,
       },
     });
+    // 首次部署：用环境变量设置初始密码；之后由用户管理功能维护
+    if (!admin.passwordHash) {
+      const initial = this.config.get<string>('ADMIN_INITIAL_PASSWORD');
+      if (initial) {
+        await this.prisma.user.update({
+          where: { id: admin.id },
+          data: { passwordHash: await hashPassword(initial) },
+        });
+        this.logger.log('已根据 ADMIN_INITIAL_PASSWORD 初始化管理员密码');
+      } else {
+        this.logger.warn('管理员尚未设置密码：请在 .env 配置 ADMIN_INITIAL_PASSWORD 后重启服务');
+      }
+    }
+  }
+
+  findById(id: string) {
+    return this.prisma.user.findUnique({ where: { id } });
   }
 }

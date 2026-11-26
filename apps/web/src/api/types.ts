@@ -206,3 +206,11 @@ export interface AgentSessionDetail extends AgentSessionSummary {
     createdAt: string;
   }[];
 }
+
+// 当前登录用户
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  isAdmin: boolean;
+}

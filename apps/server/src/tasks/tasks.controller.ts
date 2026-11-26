@@ -8,7 +8,10 @@ import {
   Patch,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
+import { ProjectRole } from '../auth/decorators';
+import { ProjectAccessGuard } from '../auth/project-access.guard';
 import { CreateDependencyDto } from './dto/create-dependency.dto';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTaskDto } from './dto/query-task.dto';
@@ -16,6 +19,9 @@ import { UpdateTaskDto } from './dto/update-task.dto';
 import { ScheduleService } from './schedule.service';
 import { TasksService } from './tasks.service';
 
+// 默认项目成员可读；任务写操作要求 MEMBER 及以上
+@UseGuards(ProjectAccessGuard)
+@ProjectRole('VIEWER')
 @Controller('projects/:projectId/tasks')
 export class TasksController {
   constructor(
@@ -24,12 +30,14 @@ export class TasksController {
   ) {}
 
   @Post()
+  @ProjectRole('MEMBER')
   create(@Param('projectId', ParseUUIDPipe) projectId: string, @Body() dto: CreateTaskDto) {
     return this.tasks.create(projectId, dto);
   }
 
   // 自动排期：按依赖与工期重算全部任务的计划起止日期
   @Post('schedule')
+  @ProjectRole('MEMBER')
   reschedule(@Param('projectId', ParseUUIDPipe) projectId: string) {
     return this.schedule.reschedule(projectId);
   }
@@ -48,6 +56,7 @@ export class TasksController {
   }
 
   @Patch(':id')
+  @ProjectRole('MEMBER')
   update(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Param('id', ParseUUIDPipe) id: string,
@@ -57,6 +66,7 @@ export class TasksController {
   }
 
   @Delete(':id')
+  @ProjectRole('MEMBER')
   remove(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Param('id', ParseUUIDPipe) id: string,
@@ -75,6 +85,7 @@ export class TasksController {
   }
 
   @Post(':id/dependencies')
+  @ProjectRole('MEMBER')
   addDependency(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Param('id', ParseUUIDPipe) id: string,
@@ -84,6 +95,7 @@ export class TasksController {
   }
 
   @Delete(':id/dependencies/:dependencyId')
+  @ProjectRole('MEMBER')
   removeDependency(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Param('id', ParseUUIDPipe) id: string,

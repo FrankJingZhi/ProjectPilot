@@ -8,7 +8,6 @@ import { ConfigService } from '@nestjs/config';
 import { ChatOpenAI } from '@langchain/openai';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { DEFAULT_USER_ID } from '../users/users.constants';
 import { AgentEventsService } from './agent-events.service';
 import { buildPlannerGraph, type AuditEntry } from './planner.graph';
 import { validatePlan } from './plan-validator';
@@ -50,6 +49,7 @@ export class AgentService {
   async startPlanning(
     projectId: string,
     requirement: string,
+    userId: string,
   ): Promise<{ sessionId: string; status: 'ACTIVE' }> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
@@ -61,7 +61,7 @@ export class AgentService {
     const session = await this.prisma.agentSession.create({
       data: {
         projectId,
-        userId: DEFAULT_USER_ID,
+        userId,
         title: requirement.slice(0, 50),
         status: 'ACTIVE',
       },

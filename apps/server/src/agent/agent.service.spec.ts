@@ -234,7 +234,9 @@ describe('AgentService', () => {
         plan: validPlan(),
       });
 
-      const result = await service.startPlanning('p1', '做一个任务管理系统');
+      const result = await service.startPlanning('p1', '做一个任务管理系统', 'user-1');
+      // 会话必须记录真实发起用户
+      expect(prisma.agentSession.create.mock.calls[0][0].data.userId).toBe('user-1');
       // 接口立即返回，工作流在后台异步执行
       expect(result.status).toBe('ACTIVE');
       await vi.waitFor(() => {
@@ -265,7 +267,7 @@ describe('AgentService', () => {
       prisma.agentSession.create.mockResolvedValue({ id: 's1' });
       invokeMock.mockRejectedValue(new Error('模型调用失败'));
 
-      await service.startPlanning('p1', '需求');
+      await service.startPlanning('p1', '需求', 'user-1');
       await vi.waitFor(() => {
         expect(prisma.agentSession.update).toHaveBeenCalledWith(
           expect.objectContaining({

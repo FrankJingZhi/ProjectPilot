@@ -1,35 +1,34 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import type { CurrentUserShape } from '../auth/auth.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { UsersService } from '../users/users.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 import { UpdateProjectDto } from './dto/update-project.dto';
 
 @Injectable()
 export class ProjectsService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly users: UsersService,
-  ) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  // 创建项目：同时把默认用户登记为 OWNER 成员
-  async create(dto: CreateProjectDto) {
-    const owner = await this.users.ensureDefaultUser();
+  // 创建项目：当前登录用户成为拥有者，并登记 OWNER 成员记录
+  async create(dto: CreateProjectDto, ownerId: string) {
     return this.prisma.project.create({
       data: {
         name: dto.name,
         description: dto.description,
         startDate: dto.startDate ? new Date(dto.startDate) : null,
         targetEndDate: dto.targetEndDate ? new Date(dto.targetEndDate) : null,
-        ownerId: owner.id,
-        members: { create: { userId: owner.id, role: 'OWNER' } },
+        ownerId,
+        members: { create: { userId: ownerId, role: 'OWNER' } },
       },
     });
   }
 
-  // 项目列表：附带任务数量统计
-  findAll() {
+  // 项目列表：普通用户只见自己拥有或参与的项目；系统管理员可见全部
+  findAll(user: CurrentUserShape) {
     return this.prisma.project.findMany({
+      where: user.isAdmin
+        ? undefined
+        : { OR: [{ ownerId: user.id }, { members: { some: { userId: user.id } } }] },
       orderBy: { createdAt: 'desc' },
       include: { _count: { select: { tasks: true } } },
     });

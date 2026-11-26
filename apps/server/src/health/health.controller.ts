@@ -1,11 +1,13 @@
 import { Controller, Get } from '@nestjs/common';
+import { Public } from '../auth/decorators';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Controller('health')
 export class HealthController {
   constructor(private readonly prisma: PrismaService) {}
 
-  // 健康检查：顺带探测数据库连通性
+  // 健康检查：顺带探测数据库连通性（无需登录，供探活/监控使用）
+  @Public()
   @Get()
   async check() {
     let database = 'down';
