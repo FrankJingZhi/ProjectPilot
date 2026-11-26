@@ -1,10 +1,16 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
 import { apiGet, apiPost } from '@/api/client';
-import type { AgentSessionDetail, AgentSessionSummary, PlanningResult, Project } from '@/api/types';
+import type {
+  AgentSessionDetail,
+  AgentSessionSummary,
+  ApproveResult,
+  PlanningResult,
+  Project,
+} from '@/api/types';
 import { TASK_PRIORITY_LABELS, TASK_TYPE_LABELS } from '@/api/types';
 
-// AI 助手：需求输入 → 澄清问答 → 计划预览（第 5 步加入审批入库与 SSE 流式）
+// AI 助手：需求输入 → 澄清问答 → 计划预览 → 人工审批入库（SSE 流式待后续增量）
 const projects = ref<Project[]>([]);
 const projectId = ref('');
 const requirement = ref('');
@@ -15,6 +21,8 @@ const sessions = ref<AgentSessionSummary[]>([]);
 const result = ref<PlanningResult | null>(null);
 const sessionDetail = ref<AgentSessionDetail | null>(null);
 const answers = ref('');
+const approving = ref(false);
+const applyMsg = ref<string | null>(null);
 
 onMounted(async () => {
   projects.value = await apiGet<Project[]>('/projects');
@@ -69,6 +77,7 @@ async function submitAnswers(): Promise<void> {
 }
 
 async function openSession(sessionId: string): Promise<void> {
+  applyMsg.value = null;
   sessionDetail.value = await apiGet<AgentSessionDetail>(`/agent/sessions/${sessionId}`);
   // 历史会话：从 state 恢复展示
   if (!result.value || result.value.sessionId !== sessionId) {
@@ -93,6 +102,40 @@ async function openSession(sessionId: string): Promise<void> {
   }
 }
 
+// 审批通过：计划写入真实任务/依赖/里程碑
+async function approvePlan(): Promise<void> {
+  if (!result.value) return;
+  approving.value = true;
+  errorMsg.value = null;
+  try {
+    const r = await apiPost<ApproveResult>(`/agent/sessions/${result.value.sessionId}/approve`, {});
+    await loadSessions();
+    await openSession(result.value.sessionId);
+    applyMsg.value = `已入库：${r.tasksCreated} 个任务、${r.dependenciesCreated} 条依赖、${r.milestonesCreated} 个里程碑，可前往任务看板查看。`;
+  } catch (err) {
+    errorMsg.value = err instanceof Error ? err.message : '入库失败';
+  } finally {
+    approving.value = false;
+  }
+}
+
+// 审批拒绝：不写入业务数据，会话终止
+async function rejectPlan(): Promise<void> {
+  if (!result.value) return;
+  if (!window.confirm('拒绝后该计划不会入库，会话将结束。确定拒绝？')) return;
+  approving.value = true;
+  errorMsg.value = null;
+  try {
+    await apiPost(`/agent/sessions/${result.value.sessionId}/reject`, {});
+    await loadSessions();
+    await openSession(result.value.sessionId);
+  } catch (err) {
+    errorMsg.value = err instanceof Error ? err.message : '操作失败';
+  } finally {
+    approving.value = false;
+  }
+}
+
 function parentTitle(index: number | null): string {
   if (index === null || !result.value?.plan) return '—';
   return result.value.plan.tasks[index]?.title ?? '—';
@@ -102,7 +145,7 @@ const sessionStatusLabel: Record<string, string> = {
   ACTIVE: '执行中',
   WAITING_INPUT: '待补充需求',
   WAITING_APPROVAL: '待审批',
-  COMPLETED: '已生成计划',
+  COMPLETED: '已入库',
   FAILED: '失败',
 };
 </script>
@@ -193,11 +236,52 @@ const sessionStatusLabel: Record<string, string> = {
         <div class="rounded-xl border border-slate-200 bg-white p-5">
           <div class="flex items-center justify-between">
             <h2 class="text-base font-semibold">📋 开发计划预览</h2>
-            <span class="rounded-full bg-amber-50 px-3 py-1 text-xs text-amber-600">
-              提案 · 第 5 步支持审批入库
+            <span
+              v-if="sessionDetail?.status === 'COMPLETED'"
+              class="rounded-full bg-emerald-50 px-3 py-1 text-xs text-emerald-600"
+            >
+              已入库
+            </span>
+            <span
+              v-else-if="sessionDetail?.status === 'FAILED'"
+              class="rounded-full bg-rose-50 px-3 py-1 text-xs text-rose-600"
+            >
+              已拒绝
+            </span>
+            <span v-else class="rounded-full bg-amber-50 px-3 py-1 text-xs text-amber-600">
+              提案 · 待审批
             </span>
           </div>
           <p class="mt-2 text-sm text-slate-500">{{ result.analysis?.summary }}</p>
+          <!-- 人工审批：确认前不写真实数据 -->
+          <div
+            v-if="sessionDetail?.status === 'WAITING_APPROVAL'"
+            class="mt-3 flex flex-wrap items-center gap-3 rounded-lg bg-amber-50 px-4 py-3"
+          >
+            <p class="flex-1 text-xs text-amber-700">
+              确认后将创建真实任务、依赖与里程碑；拒绝则不写入任何数据。
+            </p>
+            <button
+              class="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+              :disabled="approving"
+              @click="approvePlan"
+            >
+              {{ approving ? '入库中…' : '✅ 确认入库' }}
+            </button>
+            <button
+              class="rounded-lg border border-slate-300 px-4 py-2 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              :disabled="approving"
+              @click="rejectPlan"
+            >
+              拒绝
+            </button>
+          </div>
+          <p
+            v-if="applyMsg"
+            class="mt-3 rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-700"
+          >
+            {{ applyMsg }}
+          </p>
           <div class="mt-3 grid grid-cols-1 gap-3 text-xs md:grid-cols-3">
             <div class="rounded-lg bg-slate-50 p-3">
               <div class="font-semibold text-slate-600">功能清单</div>

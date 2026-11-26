@@ -19,7 +19,7 @@ export interface AuditEntry {
   toolName: string;
   input: unknown;
   output?: unknown;
-  status: 'SUCCESS' | 'FAILED';
+  status: 'SUCCESS' | 'FAILED' | 'REJECTED';
   error?: string;
 }
 export type AuditFn = (entry: AuditEntry) => Promise<void>;

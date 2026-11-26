@@ -19,6 +19,18 @@ export class AgentController {
     return this.agent.reply(sessionId, dto.answers);
   }
 
+  // 审批通过：计划提案写入真实任务/依赖/里程碑
+  @Post('agent/sessions/:sessionId/approve')
+  approve(@Param('sessionId', ParseUUIDPipe) sessionId: string) {
+    return this.agent.approvePlan(sessionId);
+  }
+
+  // 审批拒绝：不写入业务数据，会话终止
+  @Post('agent/sessions/:sessionId/reject')
+  reject(@Param('sessionId', ParseUUIDPipe) sessionId: string) {
+    return this.agent.rejectPlan(sessionId);
+  }
+
   // 项目的会话列表
   @Get('projects/:projectId/agent/sessions')
   listSessions(@Param('projectId', ParseUUIDPipe) projectId: string) {

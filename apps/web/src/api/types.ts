@@ -113,6 +113,15 @@ export interface PlanningResult {
   plan?: ProjectPlan | null;
 }
 
+// 审批入库结果
+export interface ApproveResult {
+  sessionId: string;
+  status: 'COMPLETED';
+  tasksCreated: number;
+  dependenciesCreated: number;
+  milestonesCreated: number;
+}
+
 export interface AgentSessionSummary {
   id: string;
   title: string;
