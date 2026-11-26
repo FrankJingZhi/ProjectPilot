@@ -13,15 +13,25 @@ import { CreateDependencyDto } from './dto/create-dependency.dto';
 import { CreateTaskDto } from './dto/create-task.dto';
 import { QueryTaskDto } from './dto/query-task.dto';
 import { UpdateTaskDto } from './dto/update-task.dto';
+import { ScheduleService } from './schedule.service';
 import { TasksService } from './tasks.service';
 
 @Controller('projects/:projectId/tasks')
 export class TasksController {
-  constructor(private readonly tasks: TasksService) {}
+  constructor(
+    private readonly tasks: TasksService,
+    private readonly schedule: ScheduleService,
+  ) {}
 
   @Post()
   create(@Param('projectId', ParseUUIDPipe) projectId: string, @Body() dto: CreateTaskDto) {
     return this.tasks.create(projectId, dto);
+  }
+
+  // 自动排期：按依赖与工期重算全部任务的计划起止日期
+  @Post('schedule')
+  reschedule(@Param('projectId', ParseUUIDPipe) projectId: string) {
+    return this.schedule.reschedule(projectId);
   }
 
   @Get()

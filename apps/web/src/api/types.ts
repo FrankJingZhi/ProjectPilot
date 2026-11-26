@@ -77,6 +77,33 @@ export const TASK_PRIORITY_LABELS: Record<TaskPriority, string> = {
   P3: 'P3 低',
 };
 
+// ==================== 排期与里程碑 ====================
+
+export interface Milestone {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string | null;
+  dueDate: string;
+  status: 'PENDING' | 'COMPLETED';
+}
+
+export interface ScheduledTask {
+  id: string;
+  title: string;
+  plannedStart: string;
+  plannedEnd: string;
+  slackDays: number;
+  critical: boolean;
+}
+
+export interface ScheduleResult {
+  projectId: string;
+  projectStart: string;
+  projectEnd: string;
+  tasks: ScheduledTask[];
+}
+
 // ==================== Agent ====================
 
 export interface RequirementAnalysis {
