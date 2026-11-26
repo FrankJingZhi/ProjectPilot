@@ -20,14 +20,15 @@ function logout(): void {
   void router.replace({ name: 'login' });
 }
 
-// 侧边导航：五个主页面
-const navItems = [
+// 侧边导航：主页面 + 管理员专属的用户管理
+const navItems = computed(() => [
   { to: '/dashboard', label: '项目仪表盘', icon: '📊' },
   { to: '/projects', label: '项目列表', icon: '📁' },
   { to: '/tasks', label: '任务管理', icon: '🗂️' },
   { to: '/assistant', label: 'AI 助手', icon: '🤖' },
   { to: '/plan', label: '项目计划', icon: '📅' },
-];
+  ...(auth.user?.isAdmin ? [{ to: '/admin/users', label: '用户管理', icon: '👥' }] : []),
+]);
 </script>
 
 <template>

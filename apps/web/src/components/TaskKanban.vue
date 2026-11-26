@@ -92,6 +92,9 @@ function onDrop(event: DragEvent, status: TaskStatus): void {
             <span class="font-medium" :class="priorityClass[task.priority]">
               {{ TASK_PRIORITY_LABELS[task.priority] }}
             </span>
+            <span v-if="task.assignee" class="rounded bg-blue-50 px-1.5 text-blue-600">
+              👤 {{ task.assignee.name }}
+            </span>
             <span v-if="task.assigneeRole">{{ task.assigneeRole }}</span>
             <span v-if="task.estimatedDays != null">{{ task.estimatedDays }} 天</span>
           </div>

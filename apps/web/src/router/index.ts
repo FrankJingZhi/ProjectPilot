@@ -53,6 +53,12 @@ export const router = createRouter({
           component: () => import('@/views/PlanView.vue'),
           meta: { title: '项目计划' },
         },
+        {
+          path: 'admin/users',
+          name: 'admin-users',
+          component: () => import('@/views/UsersAdminView.vue'),
+          meta: { title: '用户管理' },
+        },
       ],
     },
   ],

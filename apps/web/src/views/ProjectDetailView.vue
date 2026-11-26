@@ -2,8 +2,18 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { apiDelete, apiGet, apiPatch, apiPost } from '@/api/client';
-import type { Project, Task, TaskPriority, TaskStatus, TaskType } from '@/api/types';
+import type {
+  AuthUser,
+  MemberRole,
+  Project,
+  ProjectMember,
+  Task,
+  TaskPriority,
+  TaskStatus,
+  TaskType,
+} from '@/api/types';
 import {
+  MEMBER_ROLE_LABELS,
   PROJECT_STATUS_LABELS,
   TASK_PRIORITY_LABELS,
   TASK_STATUS_LABELS,
@@ -12,8 +22,10 @@ import {
 import AppModal from '@/components/AppModal.vue';
 import ConfirmDialog from '@/components/ConfirmDialog.vue';
 import TaskKanban from '@/components/TaskKanban.vue';
+import { useAuthStore } from '@/stores/auth';
 
 const route = useRoute();
+const auth = useAuthStore();
 const projectId = route.params.id as string;
 
 const project = ref<Project | null>(null);
@@ -21,8 +33,21 @@ const tasks = ref<Task[]>([]);
 const loading = ref(true);
 const loadError = ref<string | null>(null);
 const statusFilter = ref<TaskStatus | ''>('');
+// 指派人过滤：'' 全部 / 'me' 我的任务 / 具体成员 ID
+const assigneeFilter = ref<string>('');
+
+// 成员管理
+const members = ref<ProjectMember[]>([]);
+const candidates = ref<AuthUser[]>([]);
+const memberError = ref<string | null>(null);
+const memberSaving = ref(false);
+const addForm = ref({ userId: '', role: 'MEMBER' as MemberRole });
+const memberDeleteTarget = ref<ProjectMember | null>(null);
+const memberDeleting = ref(false);
 // 视图模式：列表 / 看板（支持 ?view=kanban 直达）
-const viewMode = ref<'list' | 'kanban'>(route.query.view === 'kanban' ? 'kanban' : 'list');
+const viewMode = ref<'list' | 'kanban' | 'members'>(
+  route.query.view === 'kanban' ? 'kanban' : 'list',
+);
 
 // 任务表单（新建/编辑共用）
 const taskModalOpen = ref(false);
@@ -36,6 +61,7 @@ const emptyForm = {
   parentId: '',
   priority: 'P1' as TaskPriority,
   assigneeRole: '',
+  assigneeId: '',
   estimatedDays: '',
   plannedStart: '',
   plannedEnd: '',
@@ -78,14 +104,25 @@ interface Row {
   task: Task;
   depth: number;
 }
+// 按指派人过滤后的任务（列表与看板共用）
+const filteredTasks = computed(() => {
+  if (assigneeFilter.value === 'me') {
+    return tasks.value.filter((t) => t.assigneeId === auth.user?.id);
+  }
+  if (assigneeFilter.value) {
+    return tasks.value.filter((t) => t.assigneeId === assigneeFilter.value);
+  }
+  return tasks.value;
+});
+
 const rows = computed<Row[]>(() => {
   if (statusFilter.value) {
-    return tasks.value
+    return filteredTasks.value
       .filter((t) => t.status === statusFilter.value)
       .map((task) => ({ task, depth: 0 }));
   }
   const byParent = new Map<string | null, Task[]>();
-  for (const task of tasks.value) {
+  for (const task of filteredTasks.value) {
     const key = task.parentId;
     if (!byParent.has(key)) byParent.set(key, []);
     byParent.get(key)!.push(task);
@@ -98,7 +135,7 @@ const rows = computed<Row[]>(() => {
     }
   };
   walk(null, 0);
-  for (const task of tasks.value) {
+  for (const task of filteredTasks.value) {
     if (!result.some((r) => r.task.id === task.id)) {
       result.push({ task, depth: 0 });
     }
@@ -116,12 +153,14 @@ async function load(): Promise<void> {
   loading.value = true;
   loadError.value = null;
   try {
-    const [p, t] = await Promise.all([
+    const [p, t, m] = await Promise.all([
       apiGet<Project>(`/projects/${projectId}`),
       apiGet<Task[]>(`/projects/${projectId}/tasks`),
+      apiGet<ProjectMember[]>(`/projects/${projectId}/members`),
     ]);
     project.value = p;
     tasks.value = t;
+    members.value = m;
   } catch (err) {
     loadError.value = err instanceof Error ? err.message : '加载失败';
   } finally {
@@ -148,6 +187,7 @@ async function openEdit(task: Task): Promise<void> {
     parentId: task.parentId ?? '',
     priority: task.priority,
     assigneeRole: task.assigneeRole ?? '',
+    assigneeId: task.assigneeId ?? '',
     estimatedDays: task.estimatedDays != null ? String(task.estimatedDays) : '',
     plannedStart: task.plannedStart ? task.plannedStart.slice(0, 10) : '',
     plannedEnd: task.plannedEnd ? task.plannedEnd.slice(0, 10) : '',
@@ -201,6 +241,7 @@ async function saveTask(): Promise<void> {
     parentId: form.value.parentId || null,
     priority: form.value.priority,
     assigneeRole: form.value.assigneeRole || undefined,
+    assigneeId: form.value.assigneeId || null,
     estimatedDays: form.value.estimatedDays ? Number(form.value.estimatedDays) : undefined,
     plannedStart: form.value.plannedStart || undefined,
     plannedEnd: form.value.plannedEnd || undefined,
@@ -273,6 +314,73 @@ const priorityClass: Record<TaskPriority, string> = {
   P3: 'text-slate-400',
 };
 
+// 当前用户是否可管理成员（拥有者或系统管理员）
+const canManageMembers = computed(
+  () => auth.user?.isAdmin || project.value?.ownerId === auth.user?.id,
+);
+
+// 进入成员页：拥有者/管理员顺便拉取可邀请候选
+async function openMembers(): Promise<void> {
+  viewMode.value = 'members';
+  memberError.value = null;
+  if (canManageMembers.value) {
+    try {
+      candidates.value = await apiGet<AuthUser[]>(`/projects/${projectId}/members/candidates`);
+    } catch {
+      // 候选加载失败不阻塞成员列表展示
+    }
+  }
+}
+
+async function refreshMembers(): Promise<void> {
+  members.value = await apiGet<ProjectMember[]>(`/projects/${projectId}/members`);
+  if (canManageMembers.value) {
+    candidates.value = await apiGet<AuthUser[]>(`/projects/${projectId}/members/candidates`);
+  }
+}
+
+async function addMember(): Promise<void> {
+  if (!addForm.value.userId) return;
+  memberSaving.value = true;
+  memberError.value = null;
+  try {
+    await apiPost(`/projects/${projectId}/members`, {
+      userId: addForm.value.userId,
+      role: addForm.value.role,
+    });
+    addForm.value = { userId: '', role: 'MEMBER' };
+    await refreshMembers();
+  } catch (err) {
+    memberError.value = err instanceof Error ? err.message : '添加失败';
+  } finally {
+    memberSaving.value = false;
+  }
+}
+
+async function changeMemberRole(member: ProjectMember, role: MemberRole): Promise<void> {
+  memberError.value = null;
+  try {
+    await apiPatch(`/projects/${projectId}/members/${member.userId}`, { role });
+  } catch (err) {
+    memberError.value = err instanceof Error ? err.message : '角色修改失败';
+  }
+  await refreshMembers();
+}
+
+async function confirmRemoveMember(): Promise<void> {
+  if (!memberDeleteTarget.value) return;
+  memberDeleting.value = true;
+  try {
+    await apiDelete(`/projects/${projectId}/members/${memberDeleteTarget.value.userId}`);
+    memberDeleteTarget.value = null;
+    await refreshMembers();
+  } catch (err) {
+    memberError.value = err instanceof Error ? err.message : '移除失败';
+  } finally {
+    memberDeleting.value = false;
+  }
+}
+
 onMounted(load);
 </script>
 
@@ -329,6 +437,15 @@ onMounted(load);
             >
               看板
             </button>
+            <button
+              class="px-3 py-2"
+              :class="
+                viewMode === 'members' ? 'bg-blue-600 text-white' : 'bg-white hover:bg-slate-50'
+              "
+              @click="openMembers"
+            >
+              成员
+            </button>
           </div>
           <select
             v-if="viewMode === 'list'"
@@ -340,8 +457,20 @@ onMounted(load);
               {{ TASK_STATUS_LABELS[s] }}
             </option>
           </select>
+          <select
+            v-if="viewMode !== 'members'"
+            v-model="assigneeFilter"
+            class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          >
+            <option value="">全部成员</option>
+            <option value="me">只看我的</option>
+            <option v-for="m in members" :key="m.userId" :value="m.userId">
+              {{ m.user.name }}
+            </option>
+          </select>
         </div>
         <button
+          v-if="viewMode !== 'members'"
           class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
           @click="openCreate"
         >
@@ -352,13 +481,16 @@ onMounted(load);
       <!-- 看板视图 -->
       <TaskKanban
         v-if="viewMode === 'kanban'"
-        :tasks="tasks"
+        :tasks="filteredTasks"
         @status-change="changeStatus"
         @edit="openEdit"
       />
 
       <!-- 列表视图 -->
-      <div v-else class="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      <div
+        v-else-if="viewMode === 'list'"
+        class="overflow-x-auto rounded-xl border border-slate-200 bg-white"
+      >
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-slate-100 text-left text-xs text-slate-400">
@@ -366,6 +498,7 @@ onMounted(load);
               <th class="px-4 py-3 font-medium">类型</th>
               <th class="px-4 py-3 font-medium">状态</th>
               <th class="px-4 py-3 font-medium">优先级</th>
+              <th class="px-4 py-3 font-medium">指派给</th>
               <th class="px-4 py-3 font-medium">负责角色</th>
               <th class="px-4 py-3 font-medium">工期(天)</th>
               <th class="px-4 py-3 font-medium">操作</th>
@@ -373,7 +506,7 @@ onMounted(load);
           </thead>
           <tbody>
             <tr v-if="rows.length === 0">
-              <td colspan="7" class="px-4 py-10 text-center text-slate-400">
+              <td colspan="8" class="px-4 py-10 text-center text-slate-400">
                 暂无任务，点击「新建任务」添加
               </td>
             </tr>
@@ -422,6 +555,7 @@ onMounted(load);
               <td class="px-4 py-3 text-xs font-medium" :class="priorityClass[task.priority]">
                 {{ task.priority }}
               </td>
+              <td class="px-4 py-3 text-slate-600">{{ task.assignee?.name || '—' }}</td>
               <td class="px-4 py-3 text-slate-500">{{ task.assigneeRole || '—' }}</td>
               <td class="px-4 py-3 text-slate-500">{{ task.estimatedDays ?? '—' }}</td>
               <td class="px-4 py-3">
@@ -440,6 +574,103 @@ onMounted(load);
             </tr>
           </tbody>
         </table>
+      </div>
+
+      <!-- 成员视图 -->
+      <div v-else class="space-y-4">
+        <p v-if="memberError" class="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-600">
+          {{ memberError }}
+        </p>
+
+        <!-- 添加成员（拥有者/系统管理员） -->
+        <div v-if="canManageMembers" class="rounded-xl border border-slate-200 bg-white p-4">
+          <h3 class="mb-3 text-sm font-semibold">添加成员</h3>
+          <div class="flex flex-wrap gap-2">
+            <select
+              v-model="addForm.userId"
+              class="min-w-52 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            >
+              <option value="">选择用户…</option>
+              <option v-for="u in candidates" :key="u.id" :value="u.id">
+                {{ u.name }}（{{ u.email }}）
+              </option>
+            </select>
+            <select
+              v-model="addForm.role"
+              class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            >
+              <option value="ADMIN">管理员</option>
+              <option value="MEMBER">成员</option>
+              <option value="VIEWER">只读</option>
+            </select>
+            <button
+              class="rounded-lg bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+              :disabled="!addForm.userId || memberSaving"
+              @click="addMember"
+            >
+              {{ memberSaving ? '添加中…' : '添加' }}
+            </button>
+          </div>
+          <p class="mt-2 text-xs text-slate-400">
+            没有可选用户？新账号请由系统管理员在「用户管理」中开通
+          </p>
+        </div>
+
+        <!-- 成员列表 -->
+        <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-slate-100 text-left text-xs text-slate-400">
+                <th class="px-4 py-3 font-medium">成员</th>
+                <th class="px-4 py-3 font-medium">邮箱</th>
+                <th class="px-4 py-3 font-medium">角色</th>
+                <th class="px-4 py-3 font-medium">加入时间</th>
+                <th v-if="canManageMembers" class="px-4 py-3 font-medium">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="m in members"
+                :key="m.id"
+                class="border-b border-slate-50 hover:bg-slate-50/60"
+              >
+                <td class="px-4 py-3">{{ m.user.name }}</td>
+                <td class="px-4 py-3 text-slate-500">{{ m.user.email }}</td>
+                <td class="px-4 py-3">
+                  <span
+                    v-if="m.role === 'OWNER'"
+                    class="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-600"
+                  >
+                    拥有者
+                  </span>
+                  <select
+                    v-else-if="canManageMembers"
+                    :value="m.role"
+                    class="rounded border border-slate-200 bg-white px-2 py-1 text-xs focus:outline-none"
+                    @change="
+                      changeMemberRole(m, ($event.target as HTMLSelectElement).value as MemberRole)
+                    "
+                  >
+                    <option value="ADMIN">管理员</option>
+                    <option value="MEMBER">成员</option>
+                    <option value="VIEWER">只读</option>
+                  </select>
+                  <span v-else class="text-slate-500">{{ MEMBER_ROLE_LABELS[m.role] }}</span>
+                </td>
+                <td class="px-4 py-3 text-slate-500">{{ m.joinedAt.slice(0, 10) }}</td>
+                <td v-if="canManageMembers" class="px-4 py-3">
+                  <button
+                    v-if="m.role !== 'OWNER'"
+                    class="text-xs text-rose-600 hover:underline"
+                    @click="memberDeleteTarget = m"
+                  >
+                    移除
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </template>
 
@@ -491,6 +722,18 @@ onMounted(load);
             >
               <option v-for="p in PRIORITY_OPTIONS" :key="p" :value="p">
                 {{ TASK_PRIORITY_LABELS[p] }}
+              </option>
+            </select>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium">指派给</label>
+            <select
+              v-model="form.assigneeId"
+              class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            >
+              <option value="">暂不指派</option>
+              <option v-for="m in members" :key="m.userId" :value="m.userId">
+                {{ m.user.name }}
               </option>
             </select>
           </div>
@@ -609,6 +852,16 @@ onMounted(load);
       :loading="deleting"
       @confirm="confirmDelete"
       @cancel="deleteTarget = null"
+    />
+
+    <!-- 移除成员确认 -->
+    <ConfirmDialog
+      :open="memberDeleteTarget !== null"
+      title="移除成员"
+      :message="`确定将「${memberDeleteTarget?.user.name}」移出项目吗？其名下任务将变为未指派。`"
+      :loading="memberDeleting"
+      @confirm="confirmRemoveMember"
+      @cancel="memberDeleteTarget = null"
     />
   </div>
 </template>
